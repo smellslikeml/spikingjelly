@@ -712,6 +712,141 @@ def test_raf_single_step_multi_step_equivalence():
     _assert_close(multi_step.u, single_step.u)
 
 
+def _ternary_factories():
+    # both ternary neurons share fire/reset; only the charge differs. Each
+    # entry pairs a constructor with the expected charge of one input step
+    # starting from v = 0 (the LIF leaks toward 0 with 1 / tau).
+    return [
+        (
+            lambda **kwargs: neuron.TernaryIFNode(**kwargs),
+            lambda x: x,
+        ),
+        (
+            lambda **kwargs: neuron.TernaryLIFNode(tau=1.5, **kwargs),
+            lambda x: x / 1.5,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("module_factory, charge", _ternary_factories())
+def test_ternary_spike_values(module_factory, charge):
+    # paper Eq. (10): strong inputs of both signs must elicit spikes in
+    # {-1, 0, +1} only, and both +1 and -1 have to appear
+    torch.manual_seed(0)
+    x_seq = torch.randn(8, 3, 4) * 3.0
+    module = module_factory(v_threshold=1.0, v_reset=0.0)
+    spikes = torch.stack([module(x) for x in x_seq])
+    values = set(torch.unique(spikes).tolist())
+    assert values <= {-1.0, 0.0, 1.0}
+    assert 1.0 in values
+    assert -1.0 in values
+
+
+@pytest.mark.parametrize("module_factory, charge", _ternary_factories())
+def test_ternary_gradients_flow(module_factory, charge):
+    # the two-sided surrogate fire must backprop finite, nonzero gradients to
+    # the input and to the learnable spike amplitude ``scale``
+    torch.manual_seed(0)
+    x = (torch.randn(4, 3, 2) * 2.0).detach().requires_grad_(True)
+    module = module_factory(
+        v_threshold=1.0, v_reset=0.0, surrogate_function=_surrogate()
+    )
+    spikes = torch.stack([module(x[t]) for t in range(x.shape[0])])
+    spikes.sum().backward()
+
+    assert torch.isfinite(x.grad).all()
+    assert x.grad.abs().sum() > 0
+    assert module.scale.grad is not None
+    assert torch.isfinite(module.scale.grad).all()
+    assert module.scale.grad.abs().sum() > 0
+
+
+@pytest.mark.parametrize("module_factory, charge", _ternary_factories())
+def test_ternary_single_step_multi_step_equivalence(module_factory, charge):
+    torch.manual_seed(0)
+    x_seq = torch.randn(6, 2, 3) * 2.0
+
+    single_step = module_factory(v_threshold=0.8, step_mode="s")
+    single_spikes = torch.stack([single_step(x) for x in x_seq])
+    single_v = single_step.v.clone()
+    functional.reset_net(single_step)
+
+    multi_step = module_factory(v_threshold=0.8, step_mode="m")
+    multi_spikes = multi_step(x_seq)
+
+    assert multi_spikes.shape == x_seq.shape
+    _assert_close(multi_spikes, single_spikes)
+    _assert_close(multi_step.v, single_v)
+    functional.reset_net(multi_step)
+
+
+@pytest.mark.parametrize("detach_reset", [False, True])
+@pytest.mark.parametrize("v_reset", [0.0, None])
+@pytest.mark.parametrize("module_factory, charge", _ternary_factories())
+def test_ternary_reset_after_either_signed_spike(
+    module_factory, charge, v_reset, detach_reset
+):
+    # paper Eq. (9): the (1 - |o^{t-1}|) factor resets the membrane after a +1
+    # or a -1 spike; silent sites keep integrating. detach_reset only changes
+    # the backward graph, so the forward voltages must match either way.
+    x = torch.tensor([3.0, -3.0, 0.1])
+    expected_spike = torch.tensor([1.0, -1.0, 0.0])
+    charged = charge(x)
+
+    module = module_factory(
+        v_threshold=1.0, v_reset=v_reset, detach_reset=detach_reset
+    )
+    module.v = torch.zeros(3)
+    spike = module(x)
+
+    _assert_close(spike, expected_spike)
+    if v_reset is None:
+        # signed soft reset: V = H - V_th * B
+        _assert_close(module.v, charged - expected_spike)
+    else:
+        # hard reset on either signed spike: V = (1 - |B|) * H
+        _assert_close(module.v, (1.0 - expected_spike.abs()) * charged)
+
+
+def test_ternary_scale_emission_and_weight_folding():
+    # paper Eqs. (16) and (18)-(19): the emitted spike is a * b, and folding a
+    # into the weights of the layer consuming the spikes (then resetting scale
+    # to 1) keeps the outputs equal while restoring pure {-1, 0, +1} spikes
+    torch.manual_seed(0)
+    x = torch.randn(5) * 2.0
+    fc = torch.nn.Linear(5, 3)
+    w_orig = fc.weight.detach().clone()
+
+    module = neuron.TernaryIFNode(v_threshold=0.5)
+    with torch.no_grad():
+        module.scale.fill_(2.0)
+    y_trainable = fc(module(x))
+    functional.reset_net(module)
+
+    with torch.no_grad():
+        fc.weight.copy_(w_orig * 2.0)
+        module.scale.fill_(1.0)
+    folded_spikes = module(x)
+    y_folded = fc(folded_spikes)
+    functional.reset_net(module)
+
+    _assert_close(y_trainable, y_folded)
+    assert set(torch.unique(folded_spikes).tolist()) <= {-1.0, 0.0, 1.0}
+
+
+def test_ternary_if_charge_matches_simple_if_when_silent():
+    # below threshold the ternary IF neuron integrates exactly like the binary
+    # SimpleIFNode: only fire and reset differ between the two models
+    torch.manual_seed(0)
+    x_seq = torch.randn(4, 3) * 0.1
+    ternary = neuron.TernaryIFNode(v_threshold=1e9)
+    binary = neuron.SimpleIFNode(v_threshold=1e9)
+    for x in x_seq:
+        ternary(x)
+        binary(x)
+    _assert_close(ternary.v, binary.v)
+
+
 @pytest.mark.parametrize("scale_reset", [False, True])
 def test_klif_step_matches_module(scale_reset):
     x = torch.randn(2, 3)
