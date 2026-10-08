@@ -152,6 +152,16 @@ Resonate-and-Fire Neurons
    * - :class:`RAFNode <spikingjelly.activation_based.neuron.resonate.RAFNode>`
      - Resonate-and-Fire (RAF) neuron.
 
+Ternary Spike Neurons
+--------------------------------------------------
+
+.. list-table::
+
+   * - :class:`TernaryIFNode <spikingjelly.activation_based.neuron.ternary.TernaryIFNode>`
+     - Ternary-spike Integrate-and-Fire neuron emitting ``{-1, 0, +1}`` spikes with a learnable spike amplitude.
+   * - :class:`TernaryLIFNode <spikingjelly.activation_based.neuron.ternary.TernaryLIFNode>`
+     - Ternary-spike Leaky Integrate-and-Fire neuron emitting ``{-1, 0, +1}`` spikes with a learnable spike amplitude.
+
 LIF Variants
 --------------------------------------------------
 
