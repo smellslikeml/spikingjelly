@@ -52,6 +52,15 @@ Resonate-and-Fire Neurons
    :show-inheritance:
    :exclude-members: supported_backends, extra_repr
 
+Ternary Spike Neurons
+--------------------------------------------------
+
+.. automodule:: spikingjelly.activation_based.neuron.ternary
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: supported_backends, extra_repr
+
 LIF Variants
 --------------------------------------------------
 

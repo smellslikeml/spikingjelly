@@ -73,6 +73,11 @@ Module: `spikingjelly.activation_based.neuron`.
 
 - Added the torch-only `RAFNode` resonate-and-fire neuron with fixed oscillator
   parameters, real-valued states, and single-step and multi-step execution.
+- Added the torch-only `TernaryIFNode` and `TernaryLIFNode` ternary-spike
+  neurons (Guo et al., AAAI 2024, arXiv:2312.06372; clean-room from the paper,
+  issue #757) emitting `{-1, 0, +1}` spikes, with a layer-wise learnable spike
+  amplitude foldable into the consuming layer's weights at inference, reset
+  after a spike of either sign, and single-step and multi-step execution.
 - Added `functional.clif_step()` for an explicit two-state ComplementaryLIF
   transition; `ComplementaryLIFNode` now uses it without changing its outputs.
 - `STBIFNode` now accepts `backend="torch"` or `backend="triton"` in its
